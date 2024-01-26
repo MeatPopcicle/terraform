@@ -1,4 +1,31 @@
 
+###################################################################################################
+#--------------------------------------------------------------------------------------------------
+# VARIABLES.
+#--------------------------------------------------------------------------------------------------
+###################################################################################################
+
+variable "vpc_cidr" {}
+
+variable "public_subnet_count" {
+  description = "Number of public subnets to create"
+  type        = number
+}
+
+variable "private_subnet_count" {
+  description = "Number of private subnets to create"
+  type        = number
+}
+
+variable "availability_zones" {
+  type = list(string)
+}
+
+###################################################################################################
+#--------------------------------------------------------------------------------------------------
+# VPC Resources.
+#--------------------------------------------------------------------------------------------------
+###################################################################################################
 resource "aws_vpc" "default" {
   cidr_block = var.vpc_cidr
 }
@@ -18,7 +45,11 @@ resource "aws_subnet" "private" {
   vpc_id            = aws_vpc.default.id
 }
 
-# Creating an Internet Gateway and attaching it to the VPC. This enables communication between instances in the VPC and the internet.
+
+#--------------------------------------------------------------------------------------------------
+# Creating an Internet Gateway and attaching it to the VPC. This enables communication between 
+# instances in the VPC and the internet.
+#--------------------------------------------------------------------------------------------------
 resource "aws_internet_gateway" "gateway" {
   vpc_id = aws_vpc.default.id
 }
@@ -35,14 +66,20 @@ resource "aws_eip" "gateway" {
   depends_on = [aws_internet_gateway.gateway]
 }
 
-# Creating NAT Gateways in the public subnets. This allows instances in private subnets to access the internet.
+#--------------------------------------------------------------------------------------------------
+# Creating NAT Gateways in the public subnets. This allows instances in private subnets 
+# to access the internet.
+#--------------------------------------------------------------------------------------------------
 resource "aws_nat_gateway" "gateway" {
   count         = 2
   subnet_id     = element(aws_subnet.public.*.id, count.index)
   allocation_id = element(aws_eip.gateway.*.id, count.index)
 }
 
-# Creating route tables for the private subnets. These route tables will route internet-bound traffic to the NAT Gateways.
+#--------------------------------------------------------------------------------------------------
+# Creating route tables for the private subnets. These route tables will route internet-bound 
+# traffic to the NAT Gateways.
+#--------------------------------------------------------------------------------------------------
 resource "aws_route_table" "private" {
   count  = 2
   vpc_id = aws_vpc.default.id
@@ -53,9 +90,29 @@ resource "aws_route_table" "private" {
   }
 }
 
+#--------------------------------------------------------------------------------------------------
 # Associating the created private route tables with the private subnets.
+#--------------------------------------------------------------------------------------------------
 resource "aws_route_table_association" "private" {
   count          = 2
   subnet_id      = element(aws_subnet.private.*.id, count.index)
   route_table_id = element(aws_route_table.private.*.id, count.index)
+}
+
+###################################################################################################
+#--------------------------------------------------------------------------------------------------
+# OUTPUTS.
+#--------------------------------------------------------------------------------------------------
+###################################################################################################
+
+output "vpc_id" {
+  value = aws_vpc.default.id
+}
+
+output "public_subnet_ids" {
+  value = aws_subnet.public.*.id
+}
+
+output "private_subnet_ids" {
+  value = aws_subnet.private.*.id
 }
