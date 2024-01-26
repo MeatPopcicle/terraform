@@ -1,4 +1,3 @@
-
 #--------------------------------------------------------------------------------------------------
 # Variables
 #--------------------------------------------------------------------------------------------------
@@ -7,104 +6,94 @@ variable "app_count" {
   default = 1
 }
 
+variable "vpc_cidr" {
+  description = "The CIDR block for the VPC"
+  type        = string
+}
+
+variable "public_subnet_count" {
+  description = "Number of public subnets to create"
+  type        = number
+}
+
+variable "private_subnet_count" {
+  description = "Number of private subnets to create"
+  type        = number
+}
+
+variable "aws_access_key" {}
+variable "aws_secret_key" {}
+
 
 #--------------------------------------------------------------------------------------------------
-# 
+# Providers
 #--------------------------------------------------------------------------------------------------
+terraform {
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 4.0"
+    }
+  }
+}
+
+
+provider "aws" {
+  access_key = var.aws_access_key
+  secret_key = var.aws_secret_key 
+
+  default_tags {
+    tags = {
+      Name = "demo"
+    }
+  }
+}
+
+
+# Data source to get the list of available AWS availability zones in the region
 data "aws_availability_zones" "available_zones" {
   state = "available"
 }
 
-resource "aws_vpc" "default" {
-  cidr_block = "10.32.0.0/16"
+
+#--------------------------------------------------------------------------------------------------
+# VPC
+#--------------------------------------------------------------------------------------------------
+module "vpc" {
+  source               = "./modules/vpc"
+  vpc_cidr             = var.vpc_cidr
+  public_subnet_count  = var.public_subnet_count
+  private_subnet_count = var.private_subnet_count
+  availability_zones   = data.aws_availability_zones.available_zones.names
 }
 
-resource "aws_subnet" "public" {
-  count                   = 2
-  cidr_block              = cidrsubnet(aws_vpc.default.cidr_block, 8, 2 + count.index)
-  availability_zone       = data.aws_availability_zones.available_zones.names[count.index]
-  vpc_id                  = aws_vpc.default.id
-  map_public_ip_on_launch = true
+
+#--------------------------------------------------------------------------------------------------
+# Security
+#--------------------------------------------------------------------------------------------------
+module "security" {
+  source               = "./modules/security"
+  vpc_id               = module.vpc.vpc_id
 }
 
-resource "aws_subnet" "private" {
-  count             = 2
-  cidr_block        = cidrsubnet(aws_vpc.default.cidr_block, 8, count.index)
-  availability_zone = data.aws_availability_zones.available_zones.names[count.index]
-  vpc_id            = aws_vpc.default.id
-}
 
-resource "aws_internet_gateway" "gateway" {
-  vpc_id = aws_vpc.default.id
-}
-
-resource "aws_route" "internet_access" {
-  route_table_id         = aws_vpc.default.main_route_table_id
-  destination_cidr_block = "0.0.0.0/0"
-  gateway_id             = aws_internet_gateway.gateway.id
-}
-
-resource "aws_eip" "gateway" {
-  count      = 2
-  vpc        = true
-  depends_on = [aws_internet_gateway.gateway]
-}
-
-resource "aws_nat_gateway" "gateway" {
-  count         = 2
-  subnet_id     = element(aws_subnet.public.*.id, count.index)
-  allocation_id = element(aws_eip.gateway.*.id, count.index)
-}
-
-resource "aws_route_table" "private" {
-  count  = 2
-  vpc_id = aws_vpc.default.id
-
-  route {
-    cidr_block = "0.0.0.0/0"
-    nat_gateway_id = element(aws_nat_gateway.gateway.*.id, count.index)
-  }
-}
-
-resource "aws_route_table_association" "private" {
-  count          = 2
-  subnet_id      = element(aws_subnet.private.*.id, count.index)
-  route_table_id = element(aws_route_table.private.*.id, count.index)
-}
-
-resource "aws_security_group" "lb" {
-  name        = "example-alb-security-group"
-  vpc_id      = aws_vpc.default.id
-
-  ingress {
-    protocol    = "tcp"
-    from_port   = 80
-    to_port     = 80
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  egress {
-    from_port = 0
-    to_port   = 0
-    protocol  = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-}
-
+# Creating an Application Load Balancer (ALB) and attaching it to the public subnets and the created security group.
 resource "aws_lb" "default" {
   name            = "example-lb"
-  subnets         = aws_subnet.public.*.id
-  security_groups = [aws_security_group.lb.id]
+  subnets         = module.vpc.public_subnet_ids
+  security_groups = [module.security.security_group_lb.id]
 }
 
+# Creating a target group for the load balancer, which will be used to route requests to the application.
 resource "aws_lb_target_group" "hello_world" {
   name        = "example-target-group"
   port        = 80
   protocol    = "HTTP"
-  vpc_id      = aws_vpc.default.id
+  vpc_id      =  module.vpc.vpc_id
   target_type = "ip"
 }
 
+# Creating a listener for the ALB, which checks for incoming HTTP requests on port 80 and forwards them to the target group.
 resource "aws_lb_listener" "hello_world" {
   load_balancer_arn = aws_lb.default.id
   port              = "80"
@@ -116,6 +105,11 @@ resource "aws_lb_listener" "hello_world" {
   }
 }
 
+
+#--------------------------------------------------------------------------------------------------
+# 
+# Defining an ECS task definition for the "hello world" application. This includes the container image, CPU, and memory specifications.
+#--------------------------------------------------------------------------------------------------
 resource "aws_ecs_task_definition" "hello_world" {
   family                   = "hello-world-app"
   network_mode             = "awsvpc"
@@ -123,6 +117,7 @@ resource "aws_ecs_task_definition" "hello_world" {
   cpu                      = 1024
   memory                   = 2048
 
+  # Container definition in JSON format, specifying the Docker image, CPU and memory allocation, and port mappings.
   container_definitions = <<DEFINITION
 [
   {
@@ -142,29 +137,17 @@ resource "aws_ecs_task_definition" "hello_world" {
 DEFINITION
 }
 
-resource "aws_security_group" "hello_world_task" {
-  name        = "example-task-security-group"
-  vpc_id      = aws_vpc.default.id
 
-  ingress {
-    protocol        = "tcp"
-    from_port       = 3000
-    to_port         = 3000
-    security_groups = [aws_security_group.lb.id]
-  }
-
-  egress {
-    protocol    = "-1"
-    from_port   = 0
-    to_port     = 0
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-}
-
+# Creating an ECS cluster named "example-cluster".
 resource "aws_ecs_cluster" "main" {
   name = "example-cluster"
 }
 
+
+#--------------------------------------------------------------------------------------------------
+# 
+# Deploying the "hello world" service on ECS. It defines the number of tasks, the launch type, and network configuration.
+#--------------------------------------------------------------------------------------------------
 resource "aws_ecs_service" "hello_world" {
   name            = "hello-world-service"
   cluster         = aws_ecs_cluster.main.id
@@ -172,18 +155,19 @@ resource "aws_ecs_service" "hello_world" {
   desired_count   = var.app_count
   launch_type     = "FARGATE"
 
+  # Network configuration for the service, specifying the security groups and subnets.
   network_configuration {
-    security_groups = [aws_security_group.hello_world_task.id]
-    subnets         = aws_subnet.private.*.id
+    security_groups = [module.security.security_group_hello_world_task.id]
+    subnets         = module.vpc.private_subnet_ids
   }
 
+  # Load balancer configuration, linking the service to the ALB's target group.
   load_balancer {
     target_group_arn = aws_lb_target_group.hello_world.id
     container_name   = "hello-world-app"
     container_port   = 3000
   }
 
+  # Ensuring the load balancer listener is created before the service.
   depends_on = [aws_lb_listener.hello_world]
 }
-
-
