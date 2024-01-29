@@ -1,3 +1,10 @@
+###################################################################################################
+###################################################################################################
+# 
+# VPC Module  
+# 
+###################################################################################################
+###################################################################################################
 
 ###################################################################################################
 #--------------------------------------------------------------------------------------------------
@@ -47,8 +54,8 @@ resource "aws_subnet" "private" {
 
 
 #--------------------------------------------------------------------------------------------------
-# Creating an Internet Gateway and attaching it to the VPC. This enables communication between 
-# instances in the VPC and the internet.
+# Creating an Internet Gateway and attaching it to the VPC. 
+# This enables communication between instances in the VPC and the internet.
 #--------------------------------------------------------------------------------------------------
 resource "aws_internet_gateway" "gateway" {
   vpc_id = aws_vpc.default.id
@@ -67,8 +74,8 @@ resource "aws_eip" "gateway" {
 }
 
 #--------------------------------------------------------------------------------------------------
-# Creating NAT Gateways in the public subnets. This allows instances in private subnets 
-# to access the internet.
+# Creating NAT Gateways in the public subnets. 
+# This allows instances in private subnets to access the internet.
 #--------------------------------------------------------------------------------------------------
 resource "aws_nat_gateway" "gateway" {
   count         = 2
@@ -77,8 +84,8 @@ resource "aws_nat_gateway" "gateway" {
 }
 
 #--------------------------------------------------------------------------------------------------
-# Creating route tables for the private subnets. These route tables will route internet-bound 
-# traffic to the NAT Gateways.
+# Creating route tables for the private subnets. 
+# These route tables will route internet-bound traffic to the NAT Gateways.
 #--------------------------------------------------------------------------------------------------
 resource "aws_route_table" "private" {
   count  = 2
@@ -111,8 +118,10 @@ output "vpc_id" {
 
 output "public_subnet_ids" {
   value = aws_subnet.public.*.id
+  # type  = list(string)
 }
 
 output "private_subnet_ids" {
   value = aws_subnet.private.*.id
+  # type  = list(string)
 }
